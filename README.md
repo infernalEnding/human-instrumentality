@@ -62,6 +62,19 @@ You can continue to override individual model identifiers (`--asr-model`, `--llm
 
 Pass `--persona-backstory`, `--tts-speaker-sample`, or model identifiers to fine-tune the persona. All generated memories land under `./memory_logs` by default. Passing a directory to `--output-wav` (for example `--output-wav ./exports`) stores numbered replies when the pipeline produces multiple turns from a single audio clip.
 
+### Using OpenRouter instead of local LLMs
+
+Set `OPENROUTER_API_KEY` (or pass `--openrouter-api-key`) and swap the backend with:
+
+```bash
+python -m persona.cli \
+  --llm-backend openrouter \
+  --llm-model openai/gpt-4o-mini \
+  --input-wav path/to/input.wav
+```
+
+The persona prompt, recent memories, and transcript text are posted to the OpenRouter `/chat/completions` endpoint so the reply can be generated. Using this path trades local privacy for hosted capability: your audio transcripts and persona state leave the machine and are subject to OpenRouter and upstream provider retention policies. Avoid sending sensitive data and review the provider's terms before enabling this mode.
+
 Memory recall can be tuned with `--memory-window` (how many past entries to load) and `--memory-min-importance` (the minimum score a memory needs before it reaches the prompt). This keeps the persona focused on high-signal reflections while still allowing fallback to more recent context when few important memories exist.
 
 Longer-lived persona preferences and relationships live in `persona_state.json` (override with `--persona-state-file`). The CLI feeds condensed summaries of these hobbies, artistic tastes, medium-term reflections, and Discord contacts into the LLM prompt so it can keep track of friends and revisit themes across sessions. Any state updates the model emits are merged back into the JSON profile automatically.

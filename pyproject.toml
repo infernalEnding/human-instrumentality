@@ -16,6 +16,7 @@ dependencies = [
     "torch>=2.2",
     "sentence-transformers>=2.7",
     "webrtcvad>=2.0",
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
