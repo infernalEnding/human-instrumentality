@@ -26,7 +26,14 @@ class PromptCapturingLLM:
     def __init__(self) -> None:
         self.persona_state: list[str] | None = None
 
-    def generate_reply(self, transcript: str, memories=None, persona_state=None) -> LLMResponse:
+    def generate_reply(
+        self,
+        transcript: str,
+        memories=None,
+        persona_state=None,
+        sentiment=None,
+        audio_emotion=None,
+    ) -> LLMResponse:
         self.persona_state = list(persona_state or [])
         return LLMResponse(
             text="Welcome!",

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, List
 
 from .audio import AudioFrame, AudioSegment
+from .emotion import AudioEmotionAnalyzer, AudioEmotionResult
 from .denoiser import Denoiser, NoOpDenoiser
 from .llm import PersonaLLM
 from .memory import MemoryLogger
@@ -22,6 +23,7 @@ class PipelineOutput:
     transcription: str
     plan: ResponsePlan
     audio: SynthesizedAudio
+    audio_emotion: AudioEmotionResult | None = None
     start_time: float | None = None
     end_time: float | None = None
     speaker_ctx: object | None = None
@@ -41,6 +43,7 @@ class PersonaPipeline:
         memory_logger: MemoryLogger | None = None,
         persona_state_manager: PersonaStateManager | None = None,
         sentiment_analyzer: SentimentAnalyzer | None = None,
+        audio_emotion_analyzer: AudioEmotionAnalyzer | None = None,
         memory_window: int = 3,
         memory_importance_threshold: float = 0.5,
     ) -> None:
@@ -60,6 +63,7 @@ class PersonaPipeline:
         self.memory_logger = memory_logger
         self.persona_state_manager = persona_state_manager
         self.sentiment_analyzer = sentiment_analyzer
+        self.audio_emotion_analyzer = audio_emotion_analyzer
         self.memory_window = max(0, memory_window)
         self.memory_importance_threshold = max(0.0, memory_importance_threshold)
 
@@ -127,6 +131,9 @@ class PersonaPipeline:
         if self.sentiment_analyzer:
             sentiment = self.sentiment_analyzer.analyze(transcript_text)
             sentiment_note = f"Sentiment: {sentiment.label} ({sentiment.score:.2f})"
+        audio_emotion: AudioEmotionResult | None = None
+        if self.audio_emotion_analyzer:
+            audio_emotion = self.audio_emotion_analyzer.analyze(decision.segment)
         speaker_id: str | int | None = None
         if speaker_ctx is not None:
             speaker_id = getattr(speaker_ctx, "user_id", None)
@@ -149,6 +156,7 @@ class PersonaPipeline:
             memory_text,
             persona_state=persona_state,
             sentiment=sentiment_note,
+            audio_emotion=audio_emotion,
         )
         plan = self.planner.create_plan(llm_response)
         plan.importance = max(0.0, min(1.0, plan.importance))
@@ -177,6 +185,7 @@ class PersonaPipeline:
             transcription=transcript_text,
             plan=plan,
             audio=audio,
+            audio_emotion=audio_emotion,
             start_time=transcription.start_time,
             end_time=transcription.end_time,
             speaker_ctx=speaker_ctx,

@@ -4,6 +4,7 @@ import struct
 from pathlib import Path
 
 from persona.audio import AudioFrame, AudioSegment
+from persona.emotion import AudioEmotionResult
 from persona.discord_integration import SpeakerContext
 from persona.llm import LLMResponse, RuleBasedPersonaLLM
 from persona.memory import MemoryLogger
@@ -33,6 +34,8 @@ class CapturingLLM:
         transcript: str,
         memories: list[str] | None = None,
         persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion=None,
     ) -> LLMResponse:
         self.memories = list(memories or [])
         self.persona_state = list(persona_state or [])
@@ -63,6 +66,8 @@ class CountingLLM:
         transcript: str,
         memories: list[str] | None = None,
         persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion=None,
     ) -> LLMResponse:
         self.calls += 1
         return LLMResponse(
@@ -80,6 +85,8 @@ class OverconfidentLLM:
         transcript: str,
         memories: list[str] | None = None,
         persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion=None,
     ) -> LLMResponse:
         return LLMResponse(
             text="This matters a lot",
@@ -99,6 +106,8 @@ class UpdatingLLM:
         transcript: str,
         memories: list[str] | None = None,
         persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion=None,
     ) -> LLMResponse:
         self.persona_state = list(persona_state or [])
         return LLMResponse(
@@ -124,6 +133,37 @@ class UpdatingLLM:
                     }
                 ],
             },
+        )
+
+
+class StaticEmotionAnalyzer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def analyze(self, segment) -> AudioEmotionResult:
+        self.calls += 1
+        return AudioEmotionResult(label="happy", score=0.87)
+
+
+class EmotionAwareLLM:
+    def __init__(self) -> None:
+        self.received_audio_emotion: AudioEmotionResult | None = None
+
+    def generate_reply(
+        self,
+        transcript: str,
+        memories: list[str] | None = None,
+        persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion: AudioEmotionResult | None = None,
+    ) -> LLMResponse:
+        self.received_audio_emotion = audio_emotion
+        return LLMResponse(
+            text="Hello with empathy",
+            should_log_memory=False,
+            emotion="engaged",
+            importance=0.2,
+            summary=None,
         )
 
 
@@ -168,6 +208,7 @@ def test_memory_retrieval_returns_recent_entries(tmp_path: Path) -> None:
         transcript="We discussed the weather",
         response="Sunny reply",
         emotion="calm",
+        sentiment=None,
         importance=0.3,
         summary="Weather chat",
     )
@@ -175,6 +216,7 @@ def test_memory_retrieval_returns_recent_entries(tmp_path: Path) -> None:
         transcript="Critical mission briefing",
         response="Acknowledged",
         emotion="focused",
+        sentiment=None,
         importance=0.9,
         summary="Mission briefing",
     )
@@ -190,6 +232,7 @@ def test_pipeline_formats_memories_for_llm(tmp_path: Path) -> None:
         transcript="Routine check-in",
         response="Cool",
         emotion="calm",
+        sentiment=None,
         importance=0.3,
         summary="Routine chat",
     )
@@ -197,6 +240,7 @@ def test_pipeline_formats_memories_for_llm(tmp_path: Path) -> None:
         transcript="High stakes mission update",
         response="Acknowledged",
         emotion="focused",
+        sentiment=None,
         importance=0.9,
         summary="High stakes mission",
     )
@@ -244,6 +288,31 @@ def test_pipeline_ignores_whitespace_transcripts(tmp_path: Path) -> None:
     assert outputs == []
     assert llm.calls == 0
     assert transcriber.calls == 1
+
+
+def test_pipeline_passes_audio_emotion(tmp_path: Path) -> None:
+    frames = [frame_from_amplitude(0.6) for _ in range(3)]
+    frames.extend(frame_from_amplitude(0.0) for _ in range(2))
+
+    analyzer = StaticEmotionAnalyzer()
+    llm = EmotionAwareLLM()
+    pipeline = PersonaPipeline(
+        vad=EnergyVAD(threshold=0.05, min_speech_frames=2, max_silence_frames=1),
+        transcriber=ScriptedTranscriber("Hearing emotions"),
+        llm=llm,
+        planner=ResponsePlanner(),
+        synthesizer=DebugSynthesizer(),
+        memory_logger=MemoryLogger(tmp_path),
+        audio_emotion_analyzer=analyzer,
+    )
+
+    outputs = pipeline.process_frames(frames)
+
+    assert analyzer.calls >= 1
+    assert llm.received_audio_emotion is not None
+    assert llm.received_audio_emotion.label == "happy"
+    assert outputs and outputs[0].audio_emotion is not None
+    assert outputs[0].audio_emotion.label == "happy"
 
 
 def test_pipeline_clamps_importance_before_logging(tmp_path: Path) -> None:
