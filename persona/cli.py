@@ -10,6 +10,7 @@ from typing import List, Sequence
 import wave
 
 from .audio import AudioFrame, MicrophoneConfig, MicrophoneStream, write_wav
+from .emotion import HuggingFaceAudioEmotionAnalyzer
 from .llm import HuggingFacePersonaLLM, OpenRouterPersonaLLM, RuleBasedPersonaLLM
 from .models import (
     DEFAULT_PROFILE_NAME,
@@ -18,6 +19,7 @@ from .models import (
     get_model_profile,
     list_model_profiles,
 )
+from .narrative import NarrativeStore
 from .memory import MemoryLogger
 from .pipeline import PersonaPipeline
 from .planner import ResponsePlanner
@@ -34,6 +36,12 @@ def build_pipeline(args: argparse.Namespace) -> PersonaPipeline:
         args.persona_state_file,
         persona_name=args.persona_name,
     )
+    audio_emotion_analyzer = None
+    if args.audio_emotion_model:
+        audio_emotion_analyzer = HuggingFaceAudioEmotionAnalyzer(args.audio_emotion_model)
+    narrative_store = None
+    if args.narrative_log_file:
+        narrative_store = NarrativeStore(args.narrative_log_file)
 
     if args.debug:
         transcriber = EchoTranscriber()
@@ -83,9 +91,12 @@ def build_pipeline(args: argparse.Namespace) -> PersonaPipeline:
         synthesizer=synthesizer,
         memory_logger=logger,
         persona_state_manager=persona_state,
+        narrative_store=narrative_store,
         sentiment_analyzer=LightweightSentimentAnalyzer(),
+        audio_emotion_analyzer=audio_emotion_analyzer,
         memory_window=args.memory_window,
         memory_importance_threshold=args.memory_min_importance,
+        narrative_importance_threshold=args.narrative_importance_threshold,
     )
     return pipeline
 
@@ -293,6 +304,20 @@ def main() -> None:  # pragma: no cover - exercised via CLI usage
         help="Minimum importance score a memory must have to be surfaced to the LLM",
     )
     parser.add_argument(
+        "--narrative-log-file",
+        type=Path,
+        default=None,
+        help="Optional path to a JSONL file where narrative events are recorded",
+    )
+    parser.add_argument(
+        "--narrative-importance-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Minimum importance score a narrative suggestion must have to be persisted"
+        ),
+    )
+    parser.add_argument(
         "--output-wav",
         type=Path,
         default=None,
@@ -383,6 +408,11 @@ def main() -> None:  # pragma: no cover - exercised via CLI usage
         "--asr-decoder",
         default=None,
         help="Optional decoder identifier supported by the ASR pipeline",
+    )
+    parser.add_argument(
+        "--audio-emotion-model",
+        default=None,
+        help="Optional Hugging Face model identifier for audio emotion analysis",
     )
     parser.add_argument(
         "--llm-model",
