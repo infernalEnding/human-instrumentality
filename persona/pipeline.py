@@ -177,6 +177,7 @@ class PersonaPipeline:
                 sentiment=sentiment_note,
                 importance=log_importance,
                 summary=plan.memory_summary,
+                tags=plan.memory_tags,
                 speaker_id=speaker_id,
             )
         self._persist_state_updates(plan)

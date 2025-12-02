@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Mapping, Protocol, TYPE_CHECKING
 
 import json
@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class LLMNarrativeSuggestion:
+    title: str | None = None
+    summary: str | None = None
+    tone: str | None = None
+
+
+@dataclass
 class LLMResponse:
     text: str
     should_log_memory: bool
@@ -23,6 +30,8 @@ class LLMResponse:
     importance: float = 0.0
     summary: str | None = None
     state_updates: Mapping[str, Any] | None = None
+    memory_tags: list[str] = field(default_factory=list)
+    narrative: LLMNarrativeSuggestion | None = None
 
 
 def _parse_structured_response(raw: str) -> LLMResponse:
@@ -36,6 +45,8 @@ def _parse_structured_response(raw: str) -> LLMResponse:
             "importance": 0.3,
             "summary": None,
             "state_updates": None,
+            "memory_tags": [],
+            "narrative": None,
         }
 
     raw_importance = payload.get("importance", 0.0)
@@ -46,6 +57,23 @@ def _parse_structured_response(raw: str) -> LLMResponse:
     updates = payload.get("state_updates")
     if not isinstance(updates, Mapping):
         updates = None
+
+    raw_tags = payload.get("memory_tags")
+    if isinstance(raw_tags, list):
+        memory_tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+    else:
+        memory_tags = []
+
+    narrative: LLMNarrativeSuggestion | None = None
+    narrative_payload = payload.get("narrative")
+    if isinstance(narrative_payload, Mapping):
+        title = str(narrative_payload.get("title", "")).strip()
+        summary = str(narrative_payload.get("summary", "")).strip()
+        tone = str(narrative_payload.get("tone", "")).strip()
+        if title or summary or tone:
+            narrative = LLMNarrativeSuggestion(
+                title=title or None, summary=summary or None, tone=tone or None
+            )
     return LLMResponse(
         text=str(payload.get("reply", "")).strip(),
         should_log_memory=bool(payload.get("log_memory", False)),
@@ -53,6 +81,8 @@ def _parse_structured_response(raw: str) -> LLMResponse:
         importance=max(0.0, min(1.0, importance)),
         summary=payload.get("summary") if payload.get("summary") not in (None, "") else None,
         state_updates=updates,
+        memory_tags=memory_tags,
+        narrative=narrative,
     )
 
 
@@ -198,9 +228,13 @@ class HuggingFacePersonaLLM:
                     '  "emotion": string,\n'
                     '  "importance": number between 0 and 1,\n'
                     '  "summary": string or null,\n'
-                    '  "state_updates": object with optional medium_term, hobbies, artistic_likes, relationships\n'
+                    '  "memory_tags": array of short keywords for logging,\n'
+                    '  "state_updates": object with optional medium_term, hobbies, artistic_likes, relationships,\n'
+                    '  "narrative": object or null with title, summary, and tone fields\n'
                     "}\n"
                     "The reply should be natural conversational text."
+                    " Use the provided sentiment and vocal emotion cues to guide tone,"
+                    " and include concise narrative context that captures the evolving story arc."
                 ),
             },
             {
@@ -350,9 +384,13 @@ class OpenRouterPersonaLLM:
                     '  "emotion": string,\n'
                     '  "importance": number between 0 and 1,\n'
                     '  "summary": string or null,\n'
-                    '  "state_updates": object with optional medium_term, hobbies, artistic_likes, relationships\n'
+                    '  "memory_tags": array of short keywords for logging,\n'
+                    '  "state_updates": object with optional medium_term, hobbies, artistic_likes, relationships,\n'
+                    '  "narrative": object or null with title, summary, and tone fields\n'
                     "}\n"
                     "The reply should be natural conversational text."
+                    " Use the provided sentiment and vocal emotion cues to guide tone,"\
+                    " and include concise narrative context that captures the evolving story arc."
                 ),
             },
             {
