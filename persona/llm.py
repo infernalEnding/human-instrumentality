@@ -25,6 +25,7 @@ class PersonaLLM(Protocol):
         transcript: str,
         memories: List[str] | None = None,
         persona_state: List[str] | None = None,
+        sentiment: str | None = None,
     ) -> LLMResponse:
         ...
 
@@ -41,14 +42,16 @@ class RuleBasedPersonaLLM:
         transcript: str,
         memories: List[str] | None = None,
         persona_state: List[str] | None = None,
+        sentiment: str | None = None,
     ) -> LLMResponse:
         memories = memories or []
         persona_state = persona_state or []
+        sentiment_hint = f" The speaker seems {sentiment}." if sentiment else ""
         memory_hint = f" I remember {memories[0]}" if memories else ""
         state_hint = f" I'm also keeping in mind: {persona_state[0]}" if persona_state else ""
         response = (
             f"{self.persona_name}: I heard you say '{transcript}'."
-            f" I'm feeling {self.mood} today.{memory_hint}{state_hint}"
+            f" I'm feeling {self.mood} today.{memory_hint}{state_hint}{sentiment_hint}"
         )
         should_log = "important" in transcript.lower()
         summary = None
@@ -116,6 +119,7 @@ class HuggingFacePersonaLLM:
         transcript: str,
         memories: List[str] | None,
         persona_state: List[str] | None,
+        sentiment: str | None,
     ) -> List[dict[str, str]]:
         memory_lines = "\n".join(f"- {memory}" for memory in (memories or []))
         memory_block = (
@@ -131,6 +135,7 @@ class HuggingFacePersonaLLM:
             if state_lines
             else ""
         )
+        sentiment_block = f"Observed sentiment: {sentiment}\n\n" if sentiment else ""
         return [
             {
                 "role": "system",
@@ -150,7 +155,7 @@ class HuggingFacePersonaLLM:
             },
             {
                 "role": "user",
-                "content": f"{memory_block}{state_block}Latest user transcript:\n{transcript}",
+                "content": f"{memory_block}{state_block}{sentiment_block}Latest user transcript:\n{transcript}",
             },
         ]
 
@@ -189,8 +194,9 @@ class HuggingFacePersonaLLM:
         transcript: str,
         memories: List[str] | None = None,
         persona_state: List[str] | None = None,
+        sentiment: str | None = None,
     ) -> LLMResponse:
-        messages = self._build_prompt(transcript, memories, persona_state)
+        messages = self._build_prompt(transcript, memories, persona_state, sentiment)
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
             try:

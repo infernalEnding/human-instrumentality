@@ -21,6 +21,7 @@ from .models import (
 from .memory import MemoryLogger
 from .pipeline import PersonaPipeline
 from .planner import ResponsePlanner
+from .sentiment import LightweightSentimentAnalyzer
 from .state import PersonaStateManager
 from .stt import EchoTranscriber, HuggingFaceTranscriber
 from .tts import DebugSynthesizer, HuggingFaceSynthesizer
@@ -71,6 +72,7 @@ def build_pipeline(args: argparse.Namespace) -> PersonaPipeline:
         synthesizer=synthesizer,
         memory_logger=logger,
         persona_state_manager=persona_state,
+        sentiment_analyzer=LightweightSentimentAnalyzer(),
         memory_window=args.memory_window,
         memory_importance_threshold=args.memory_min_importance,
     )
