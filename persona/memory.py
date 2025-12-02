@@ -53,12 +53,16 @@ class MemoryLogger:
         importance: float,
         summary: str | None = None,
         tags: Sequence[str] | None = None,
+        speaker_id: str | None = None,
     ) -> MemoryEntry:
         timestamp = datetime.utcnow()
         summary_text = summary or transcript[:120]
         safe_name = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
         path = self.base_dir / f"{safe_name}.md"
-        tag_values = tuple(tags or self._auto_tags(transcript, response, emotion))
+        tag_values = list(tags or self._auto_tags(transcript, response, emotion))
+        if speaker_id:
+            tag_values.append(f"user:{speaker_id}")
+        tag_values = tuple(dict.fromkeys(tag_values))
         content = self._render_markdown(
             timestamp=timestamp,
             transcript=transcript,
@@ -94,33 +98,45 @@ class MemoryLogger:
         *,
         limit: int = 3,
         min_importance: float = 0.0,
+        speaker_id: str | None = None,
     ) -> List[MemoryEntry]:
-        entries: List[MemoryEntry] = []
+        entries: List[tuple[MemoryEntry, int]] = []
         for path in self.base_dir.glob("*.md"):
             entry = self._parse_entry(path)
             if entry and entry.importance >= min_importance:
-                entries.append(entry)
-        entries.sort(key=lambda item: (item.importance, item.timestamp), reverse=True)
-        return entries[:limit]
+                priority = self._speaker_priority(entry.tags, speaker_id)
+                if speaker_id and priority == 0:
+                    continue
+                entries.append((entry, priority))
+        entries.sort(
+            key=lambda item: (item[1], item[0].importance, item[0].timestamp),
+            reverse=True,
+        )
+        return [entry for entry, _ in entries[:limit]]
 
     def format_entries_for_prompt(
         self,
         *,
         limit: int = 3,
         min_importance: float = 0.4,
+        speaker_id: str | None = None,
     ) -> List[str]:
         if limit <= 0:
             return []
-        selected = self.rank_entries(limit=limit, min_importance=min_importance)
+        selected = self.rank_entries(
+            limit=limit, min_importance=min_importance, speaker_id=speaker_id
+        )
         if len(selected) < limit and min_importance > 0.0:
-            fallback = self.rank_entries(limit=limit, min_importance=0.0)
+            fallback = self.rank_entries(
+                limit=limit, min_importance=0.0, speaker_id=speaker_id
+            )
             existing_paths = {entry.path for entry in selected}
             for entry in fallback:
                 if entry.path not in existing_paths:
                     selected.append(entry)
                 if len(selected) >= limit:
                     break
-        selected.sort(key=lambda item: (item.importance, item.timestamp), reverse=True)
+        selected = self._sort_entries(selected, speaker_id)
         formatted: List[str] = []
         for entry in selected[:limit]:
             metadata = [
@@ -134,19 +150,27 @@ class MemoryLogger:
             formatted.append(f"{entry.summary} ({'; '.join(metadata)})")
         return formatted
 
-    def retrieve(self, query_terms: Iterable[str], limit: int = 3) -> List[str]:
+    def retrieve(
+        self, query_terms: Iterable[str], limit: int = 3, speaker_id: str | None = None
+    ) -> List[str]:
         terms = [term.lower() for term in query_terms if term]
         if not terms:
             return []
-        scored: List[tuple[int, Path]] = []
+        scored: List[tuple[int, int, datetime, Path]] = []
         for path in self.base_dir.glob("*.md"):
+            entry = self._parse_entry(path)
+            if not entry:
+                continue
+            priority = self._speaker_priority(entry.tags, speaker_id)
+            if speaker_id and priority == 0:
+                continue
             text = path.read_text(encoding="utf-8").lower()
             score = sum(text.count(term) for term in terms)
             if score > 0:
-                scored.append((score, path))
+                scored.append((priority, score, entry.timestamp, path))
         scored.sort(reverse=True)
         snippets: List[str] = []
-        for _, path in scored[:limit]:
+        for _, _, _, path in scored[:limit]:
             lines = path.read_text(encoding="utf-8").splitlines()
             summary_line = self._extract_field(lines, "Summary")
             snippets.append(summary_line or (lines[0] if lines else ""))
@@ -270,3 +294,28 @@ class MemoryLogger:
         if "?" in transcript:
             tags.add("question")
         return sorted(tags)
+
+    def _speaker_priority(
+        self, tags: Sequence[str], speaker_id: str | None = None
+    ) -> int:
+        if not speaker_id:
+            return 1
+        user_tag = f"user:{speaker_id}"
+        if user_tag in tags:
+            return 2
+        if any(tag.startswith("user:") for tag in tags):
+            return 0
+        return 1
+
+    def _sort_entries(
+        self, entries: Sequence[MemoryEntry], speaker_id: str | None
+    ) -> List[MemoryEntry]:
+        return sorted(
+            entries,
+            key=lambda item: (
+                self._speaker_priority(item.tags, speaker_id),
+                item.importance,
+                item.timestamp,
+            ),
+            reverse=True,
+        )

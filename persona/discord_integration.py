@@ -39,11 +39,13 @@ class DiscordVoiceBridge:
         self.frame_duration_s = frame_duration_s
         self._timestamp = 0.0
 
-    def handle_audio_frames(self, frames) -> None:
-        outputs = self.pipeline.process_frames(frames)
+    def handle_audio_frames(self, frames, *, speaker_id: str | None = None) -> None:
+        outputs = self.pipeline.process_frames(frames, speaker_id=speaker_id)
         self._dispatch(outputs)
 
-    def receive_discord_pcm(self, pcm: bytes, sample_rate: int, channels: int) -> None:
+    def receive_discord_pcm(
+        self, pcm: bytes, sample_rate: int, channels: int, *, speaker_id: str | None = None
+    ) -> None:
         frame = AudioFrame(
             pcm=pcm,
             sample_rate=sample_rate,
@@ -51,11 +53,11 @@ class DiscordVoiceBridge:
             timestamp=self._timestamp,
         )
         self._timestamp += len(pcm) / (2 * channels * sample_rate)
-        outputs = self.pipeline.process_stream_frame(frame)
+        outputs = self.pipeline.process_stream_frame(frame, speaker_id=speaker_id)
         self._dispatch(outputs)
 
-    def flush(self) -> None:
-        outputs = self.pipeline.flush()
+    def flush(self, *, speaker_id: str | None = None) -> None:
+        outputs = self.pipeline.flush(speaker_id=speaker_id)
         self._dispatch(outputs)
 
     def _dispatch(self, outputs: Iterable) -> None:
@@ -66,3 +68,22 @@ class DiscordVoiceBridge:
                 except TypeError:
                     self.on_transcript(output.transcription)
             self.send_audio(output.audio.payload)
+
+
+@dataclass
+class SpeakerSession:
+    """Per-speaker session that threads a speaker identifier through the pipeline."""
+
+    speaker_id: str
+    bridge: DiscordVoiceBridge
+
+    def handle_audio_frames(self, frames) -> None:
+        self.bridge.handle_audio_frames(frames, speaker_id=self.speaker_id)
+
+    def receive_discord_pcm(self, pcm: bytes, sample_rate: int, channels: int) -> None:
+        self.bridge.receive_discord_pcm(
+            pcm, sample_rate, channels, speaker_id=self.speaker_id
+        )
+
+    def flush(self) -> None:
+        self.bridge.flush(speaker_id=self.speaker_id)

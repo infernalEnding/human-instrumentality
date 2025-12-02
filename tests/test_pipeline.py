@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
+from typing import Sequence
 
 from persona.audio import AudioFrame
 from persona.llm import LLMResponse, RuleBasedPersonaLLM
@@ -123,6 +124,34 @@ class UpdatingLLM:
                     }
                 ],
             },
+        )
+
+
+class RecordingMemoryLogger(MemoryLogger):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.speaker_ids: list[str | None] = []
+
+    def log(
+        self,
+        *,
+        transcript: str,
+        response: str,
+        emotion: str | None,
+        importance: float,
+        summary: str | None = None,
+        tags: Sequence[str] | None = None,
+        speaker_id: str | None = None,
+    ):
+        self.speaker_ids.append(speaker_id)
+        return super().log(
+            transcript=transcript,
+            response=response,
+            emotion=emotion,
+            importance=importance,
+            summary=summary,
+            tags=tags,
+            speaker_id=speaker_id,
         )
 
 
@@ -266,6 +295,27 @@ def test_pipeline_clamps_importance_before_logging(tmp_path: Path) -> None:
     assert memory_files
     content = memory_files[0].read_text(encoding="utf-8")
     assert "Importance: 1.00" in content
+
+
+def test_pipeline_threads_speaker_id_into_memory(tmp_path: Path) -> None:
+    frames = [frame_from_amplitude(0.6) for _ in range(4)]
+    frames.extend(frame_from_amplitude(0.0) for _ in range(2))
+
+    logger = RecordingMemoryLogger(tmp_path)
+    pipeline = PersonaPipeline(
+        vad=EnergyVAD(threshold=0.05, min_speech_frames=2, max_silence_frames=1),
+        transcriber=ScriptedTranscriber("Speaker attributed line"),
+        llm=OverconfidentLLM(),
+        planner=ResponsePlanner(),
+        synthesizer=DebugSynthesizer(),
+        memory_logger=logger,
+    )
+
+    outputs = pipeline.process_frames(frames, speaker_id="discord-user")
+    assert len(outputs) == 1
+    assert logger.speaker_ids == ["discord-user"]
+    entries = logger.list_entries(limit=1)
+    assert entries and "user:discord-user" in entries[0].tags
 
 
 def test_pipeline_updates_persona_state(tmp_path: Path) -> None:

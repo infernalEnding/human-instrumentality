@@ -48,33 +48,41 @@ class PersonaPipeline:
         self.memory_window = max(0, memory_window)
         self.memory_importance_threshold = max(0.0, memory_importance_threshold)
 
-    def process_frames(self, frames: Iterable[AudioFrame]) -> List[PipelineOutput]:
+    def process_frames(
+        self, frames: Iterable[AudioFrame], *, speaker_id: str | None = None
+    ) -> List[PipelineOutput]:
         self.vad.reset()
         outputs: List[PipelineOutput] = []
         for frame in frames:
-            outputs.extend(self.process_stream_frame(frame))
-        outputs.extend(self.flush())
+            outputs.extend(self.process_stream_frame(frame, speaker_id=speaker_id))
+        outputs.extend(self.flush(speaker_id=speaker_id))
         return outputs
 
-    def process_stream_frame(self, frame: AudioFrame) -> List[PipelineOutput]:
+    def process_stream_frame(
+        self, frame: AudioFrame, *, speaker_id: str | None = None
+    ) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
         decisions = self.vad.process_frame(frame)
-        outputs.extend(self._consume_decisions(decisions))
+        outputs.extend(self._consume_decisions(decisions, speaker_id=speaker_id))
         return outputs
 
-    def flush(self) -> List[PipelineOutput]:
+    def flush(self, *, speaker_id: str | None = None) -> List[PipelineOutput]:
         decisions = self.vad.flush()
-        return self._consume_decisions(decisions)
+        return self._consume_decisions(decisions, speaker_id=speaker_id)
 
-    def _consume_decisions(self, decisions: Iterable[VADDecision]) -> List[PipelineOutput]:
+    def _consume_decisions(
+        self, decisions: Iterable[VADDecision], *, speaker_id: str | None = None
+    ) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
         for decision in decisions:
-            output = self._process_segment(decision)
+            output = self._process_segment(decision, speaker_id=speaker_id)
             if output:
                 outputs.append(output)
         return outputs
 
-    def _process_segment(self, decision: VADDecision) -> PipelineOutput | None:
+    def _process_segment(
+        self, decision: VADDecision, *, speaker_id: str | None = None
+    ) -> PipelineOutput | None:
         transcription = self.transcriber.transcribe(decision.segment)
         transcript_text = transcription.text.strip() if transcription.text else ""
         if not transcript_text:
@@ -83,6 +91,7 @@ class PersonaPipeline:
             memory_text = self.memory_logger.format_entries_for_prompt(
                 limit=self.memory_window,
                 min_importance=self.memory_importance_threshold,
+                speaker_id=speaker_id,
             )
         else:
             memory_text = []
@@ -113,6 +122,7 @@ class PersonaPipeline:
                 emotion=plan.emotion,
                 importance=log_importance,
                 summary=plan.memory_summary,
+                speaker_id=speaker_id,
             )
         if self.persona_state_manager and plan.state_updates:
             self.persona_state_manager.apply_updates(plan.state_updates)
