@@ -16,6 +16,7 @@ class MemoryEntry:
     timestamp: datetime
     summary: str
     emotion: str | None
+    sentiment: str | None
     importance: float
     tags: tuple[str, ...] = ()
 
@@ -56,6 +57,7 @@ class MemoryLogger:
         transcript: str,
         response: str,
         emotion: str | None,
+        sentiment: str | None,
         importance: float,
         summary: str | None = None,
         tags: Sequence[str] | None = None,
@@ -65,7 +67,9 @@ class MemoryLogger:
         summary_text = summary or transcript[:120]
         safe_name = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
         path = self.base_dir / f"{safe_name}.md"
-        tag_values = list(tags or self._auto_tags(transcript, response, emotion))
+        tag_values = list(
+            tags or self._auto_tags(transcript, response, emotion, sentiment)
+        )
         if speaker_id is not None:
             user_tag = f"user:{speaker_id}"
             if user_tag not in tag_values:
@@ -76,6 +80,7 @@ class MemoryLogger:
             transcript=transcript,
             response=response,
             emotion=emotion,
+            sentiment=sentiment,
             importance=importance,
             summary=summary_text,
             tags=tag_values,
@@ -99,6 +104,7 @@ class MemoryLogger:
             timestamp=timestamp,
             summary=summary_text,
             emotion=emotion,
+            sentiment=sentiment,
             importance=importance,
             tags=tag_values,
         )
@@ -171,6 +177,8 @@ class MemoryLogger:
             ]
             if entry.emotion:
                 metadata.append(f"emotion={entry.emotion}")
+            if entry.sentiment:
+                metadata.append(f"sentiment={entry.sentiment}")
             if entry.tags:
                 metadata.append("tags=" + ", ".join(entry.tags))
             formatted.append(f"{entry.summary} ({'; '.join(metadata)})")
@@ -335,6 +343,7 @@ class MemoryLogger:
         transcript: str,
         response: str,
         emotion: str | None,
+        sentiment: str | None,
         importance: float,
         summary: str,
         tags: Sequence[str],
@@ -343,6 +352,7 @@ class MemoryLogger:
             f"# Memory Log {timestamp.isoformat()}Z",
             f"Persona: {self.persona_name}",
             f"Emotion: {emotion or 'neutral'}",
+            f"Sentiment: {sentiment or 'neutral'}",
             f"Importance: {importance:.2f}",
             f"Tags: {', '.join(tags) if tags else 'conversation'}",
             f"Summary: {summary}",
@@ -381,6 +391,7 @@ class MemoryLogger:
         lines = path.read_text(encoding="utf-8").splitlines()
         summary = self._extract_field(lines, "Summary") or self._derive_summary(lines)
         emotion = self._extract_field(lines, "Emotion") or None
+        sentiment = self._extract_field(lines, "Sentiment") or None
         tags_line = self._extract_field(lines, "Tags")
         tags = (
             tuple(tag.strip() for tag in tags_line.split(",") if tag.strip())
@@ -393,6 +404,7 @@ class MemoryLogger:
             timestamp=timestamp,
             summary=summary,
             emotion=emotion,
+            sentiment=sentiment,
             importance=self._parse_importance(lines),
             tags=tags,
         )
@@ -408,11 +420,14 @@ class MemoryLogger:
         return ""
 
     def _auto_tags(
-        self, transcript: str, response: str, emotion: str | None
+        self, transcript: str, response: str, emotion: str | None, sentiment: str | None
     ) -> List[str]:
         tags = set(self.default_tags)
         if emotion:
             tags.add(f"emotion:{emotion.lower()}")
+        sentiment_hint = self._extract_sentiment_tag(sentiment)
+        if sentiment_hint:
+            tags.add(sentiment_hint)
         combined = f"{transcript} {response}".lower()
         if "plan" in combined:
             tags.add("planning")
@@ -431,3 +446,17 @@ class MemoryLogger:
             return False
         user_tag = f"user:{speaker_id}"
         return user_tag in tags
+
+    def _extract_sentiment_tag(self, sentiment: str | None) -> str | None:
+        if not sentiment:
+            return None
+        for prefix in ("sentiment:", "Sentiment:"):
+            idx = sentiment.find(prefix)
+            if idx != -1:
+                value = sentiment[idx + len(prefix) :].split()[0]
+                if value:
+                    return f"sentiment:{value.lower()}"
+        fallback = sentiment.strip().split()
+        if fallback:
+            return f"sentiment:{fallback[0].lower()}"
+        return None

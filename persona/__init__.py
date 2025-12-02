@@ -13,6 +13,7 @@ from .models import (
     get_model_profile,
     list_model_profiles,
 )
+from .sentiment import LightweightSentimentAnalyzer, SentimentAnalyzer, SentimentResult
 from .state import PersonaStateManager
 from .tts import DebugSynthesizer, HuggingFaceSynthesizer, SynthesizedAudio, SpeechSynthesizer
 from .pipeline import DiscordSpeakerPipeline, PersonaPipeline, PipelineOutput
@@ -31,6 +32,9 @@ __all__ = [
     "RuleBasedPersonaLLM",
     "HuggingFacePersonaLLM",
     "MemoryLogger",
+    "SentimentAnalyzer",
+    "SentimentResult",
+    "LightweightSentimentAnalyzer",
     "PersonaStateManager",
     "ResponsePlan",
     "ResponsePlanner",

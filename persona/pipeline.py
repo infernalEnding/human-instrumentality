@@ -10,6 +10,7 @@ from .denoiser import Denoiser, NoOpDenoiser
 from .llm import PersonaLLM
 from .memory import MemoryLogger
 from .planner import ResponsePlan, ResponsePlanner
+from .sentiment import SentimentAnalyzer
 from .state import PersonaStateManager
 from .stt import Transcriber
 from .tts import SpeechSynthesizer, SynthesizedAudio
@@ -39,6 +40,7 @@ class PersonaPipeline:
         synthesizer: SpeechSynthesizer,
         memory_logger: MemoryLogger | None = None,
         persona_state_manager: PersonaStateManager | None = None,
+        sentiment_analyzer: SentimentAnalyzer | None = None,
         memory_window: int = 3,
         memory_importance_threshold: float = 0.5,
     ) -> None:
@@ -57,6 +59,7 @@ class PersonaPipeline:
         self.synthesizer = synthesizer
         self.memory_logger = memory_logger
         self.persona_state_manager = persona_state_manager
+        self.sentiment_analyzer = sentiment_analyzer
         self.memory_window = max(0, memory_window)
         self.memory_importance_threshold = max(0.0, memory_importance_threshold)
 
@@ -120,6 +123,10 @@ class PersonaPipeline:
         transcript_text = transcription.text.strip() if transcription.text else ""
         if not transcript_text:
             return None
+        sentiment_note: str | None = None
+        if self.sentiment_analyzer:
+            sentiment = self.sentiment_analyzer.analyze(transcript_text)
+            sentiment_note = f"Sentiment: {sentiment.label} ({sentiment.score:.2f})"
         speaker_id: str | int | None = None
         if speaker_ctx is not None:
             speaker_id = getattr(speaker_ctx, "user_id", None)
@@ -141,6 +148,7 @@ class PersonaPipeline:
             transcript_text,
             memory_text,
             persona_state=persona_state,
+            sentiment=sentiment_note,
         )
         plan = self.planner.create_plan(llm_response)
         plan.importance = max(0.0, min(1.0, plan.importance))
@@ -158,10 +166,11 @@ class PersonaPipeline:
                 transcript=transcript_text,
                 response=plan.response_text,
                 emotion=plan.emotion,
+                sentiment=sentiment_note,
                 importance=log_importance,
                 summary=plan.memory_summary,
                 speaker_id=speaker_id,
-        )
+            )
         self._persist_state_updates(plan)
         audio = self.synthesizer.synthesize(plan.response_text)
         return PipelineOutput(
