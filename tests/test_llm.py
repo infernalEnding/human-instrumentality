@@ -120,3 +120,21 @@ def test_huggingface_llm_parses_state_updates() -> None:
         persona_state=["Hobbies: piano"],
     )
     assert response.state_updates == {"hobbies": {"add": ["guitar"]}}
+
+
+def test_huggingface_llm_parses_narrative_and_tags() -> None:
+    llm = HuggingFacePersonaLLM(
+        "fake/model",
+        pipeline_factory=lambda *_, **__: StubPipeline(
+            '{"reply": "Let\'s keep exploring music", "log_memory": true, "emotion": "thoughtful", "importance": 0.7, "summary": "Music chat", "memory_tags": ["music", "goal"], "narrative": {"title": "Jamming arc", "summary": "Building a playlist together", "tone": "encouraging"}}'
+        ),
+    )
+
+    response = llm.generate_reply(
+        "Maybe we should write a song",
+        memories=["Talked about bands"],
+    )
+    assert response.memory_tags == ["music", "goal"]
+    assert response.narrative is not None
+    assert response.narrative.title == "Jamming arc"
+    assert response.narrative.tone == "encouraging"

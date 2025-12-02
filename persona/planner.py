@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
-from .llm import LLMResponse
+from .llm import LLMNarrativeSuggestion, LLMResponse
 
 
 @dataclass
@@ -16,6 +16,8 @@ class ResponsePlan:
     emotion: Optional[str]
     importance: float
     state_updates: Mapping[str, object] | None = None
+    memory_tags: tuple[str, ...] = ()
+    narrative: LLMNarrativeSuggestion | None = None
 
 
 class ResponsePlanner:
@@ -29,4 +31,6 @@ class ResponsePlanner:
             emotion=llm_response.emotion,
             importance=llm_response.importance,
             state_updates=llm_response.state_updates,
+            memory_tags=tuple(llm_response.memory_tags),
+            narrative=llm_response.narrative,
         )

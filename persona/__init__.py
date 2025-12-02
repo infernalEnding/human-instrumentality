@@ -3,7 +3,13 @@
 from .audio import AudioFrame, AudioSegment, write_wav
 from .vad import EnergyVAD
 from .stt import EchoTranscriber, HuggingFaceTranscriber, TranscriptionResult, Transcriber
-from .llm import HuggingFacePersonaLLM, LLMResponse, PersonaLLM, RuleBasedPersonaLLM
+from .llm import (
+    HuggingFacePersonaLLM,
+    LLMNarrativeSuggestion,
+    LLMResponse,
+    PersonaLLM,
+    RuleBasedPersonaLLM,
+)
 from .memory import MemoryLogger
 from .planner import ResponsePlan, ResponsePlanner
 from .models import (
@@ -27,6 +33,7 @@ __all__ = [
     "Transcriber",
     "EchoTranscriber",
     "HuggingFaceTranscriber",
+    "LLMNarrativeSuggestion",
     "LLMResponse",
     "PersonaLLM",
     "RuleBasedPersonaLLM",
