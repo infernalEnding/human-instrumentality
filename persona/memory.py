@@ -100,13 +100,19 @@ class MemoryLogger:
         *,
         limit: int = 3,
         min_importance: float = 0.0,
+        speaker_id: str | int | None = None,
     ) -> List[MemoryEntry]:
         entries: List[MemoryEntry] = []
         for path in self.base_dir.glob("*.md"):
             entry = self._parse_entry(path)
             if entry and entry.importance >= min_importance:
                 entries.append(entry)
-        entries.sort(key=lambda item: (item.importance, item.timestamp), reverse=True)
+        sort_key = lambda item: (
+            self._is_speaker_match(item.tags, speaker_id),
+            item.importance,
+            item.timestamp,
+        )
+        entries.sort(key=sort_key, reverse=True)
         return entries[:limit]
 
     def format_entries_for_prompt(
@@ -114,19 +120,31 @@ class MemoryLogger:
         *,
         limit: int = 3,
         min_importance: float = 0.4,
+        speaker_id: str | int | None = None,
     ) -> List[str]:
         if limit <= 0:
             return []
-        selected = self.rank_entries(limit=limit, min_importance=min_importance)
+        selected = self.rank_entries(
+            limit=limit, min_importance=min_importance, speaker_id=speaker_id
+        )
         if len(selected) < limit and min_importance > 0.0:
-            fallback = self.rank_entries(limit=limit, min_importance=0.0)
+            fallback = self.rank_entries(
+                limit=limit, min_importance=0.0, speaker_id=speaker_id
+            )
             existing_paths = {entry.path for entry in selected}
             for entry in fallback:
                 if entry.path not in existing_paths:
                     selected.append(entry)
                 if len(selected) >= limit:
                     break
-        selected.sort(key=lambda item: (item.importance, item.timestamp), reverse=True)
+        selected.sort(
+            key=lambda item: (
+                self._is_speaker_match(item.tags, speaker_id),
+                item.importance,
+                item.timestamp,
+            ),
+            reverse=True,
+        )
         formatted: List[str] = []
         for entry in selected[:limit]:
             metadata = [
@@ -140,20 +158,36 @@ class MemoryLogger:
             formatted.append(f"{entry.summary} ({'; '.join(metadata)})")
         return formatted
 
-    def retrieve(self, query_terms: Iterable[str], limit: int = 3) -> List[str]:
+    def retrieve(
+        self,
+        query_terms: Iterable[str],
+        limit: int = 3,
+        *,
+        speaker_id: str | int | None = None,
+    ) -> List[str]:
         terms = [term.lower() for term in query_terms if term]
         if not terms:
             return []
-        scored: List[tuple[int, Path]] = []
+        scored: List[tuple[int, MemoryEntry]] = []
         for path in self.base_dir.glob("*.md"):
+            entry = self._parse_entry(path)
+            if not entry:
+                continue
             text = path.read_text(encoding="utf-8").lower()
             score = sum(text.count(term) for term in terms)
             if score > 0:
-                scored.append((score, path))
-        scored.sort(reverse=True)
+                scored.append((score, entry))
+        scored.sort(
+            key=lambda item: (
+                self._is_speaker_match(item[1].tags, speaker_id),
+                item[0],
+                item[1].timestamp,
+            ),
+            reverse=True,
+        )
         snippets: List[str] = []
-        for _, path in scored[:limit]:
-            lines = path.read_text(encoding="utf-8").splitlines()
+        for _, entry in scored[:limit]:
+            lines = entry.path.read_text(encoding="utf-8").splitlines()
             summary_line = self._extract_field(lines, "Summary")
             snippets.append(summary_line or (lines[0] if lines else ""))
         return snippets
@@ -276,3 +310,11 @@ class MemoryLogger:
         if "?" in transcript:
             tags.add("question")
         return sorted(tags)
+
+    def _is_speaker_match(
+        self, tags: Sequence[str], speaker_id: str | int | None
+    ) -> bool:
+        if speaker_id is None:
+            return False
+        user_tag = f"user:{speaker_id}"
+        return user_tag in tags

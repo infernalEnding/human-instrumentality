@@ -106,3 +106,44 @@ def test_format_entries_for_prompt_prioritises_importance(tmp_path) -> None:
     assert "Mission parameters" in top_memory
     assert "importance=0.85" in top_memory
     assert "emotion=focused" in top_memory
+
+
+def test_retrieve_prefers_speaker_memories(tmp_path) -> None:
+    logger = MemoryLogger(tmp_path)
+    logger.log(
+        transcript="Discussed the mission goals in depth mission",
+        response="Great details",
+        emotion="focused",
+        importance=0.6,
+        summary="Global mission memory",
+    )
+    logger.log(
+        transcript="Mission update received",
+        response="Acknowledged",
+        emotion="curious",
+        importance=0.7,
+        summary="User mission memory",
+        speaker_id="7",
+    )
+
+    snippets = logger.retrieve(["mission"], limit=2, speaker_id="7")
+    assert snippets
+    assert "User mission memory" in snippets[0]
+    assert any("Global mission memory" in snippet for snippet in snippets)
+
+
+def test_format_prompt_falls_back_without_speaker_match(tmp_path) -> None:
+    logger = MemoryLogger(tmp_path)
+    logger.log(
+        transcript="Talked about a shared hobby",
+        response="Sounds fun",
+        emotion="happy",
+        importance=0.9,
+        summary="General hobby memory",
+    )
+
+    prompt_memories = logger.format_entries_for_prompt(
+        limit=1, min_importance=0.5, speaker_id="missing"
+    )
+    assert prompt_memories
+    assert "General hobby memory" in prompt_memories[0]
