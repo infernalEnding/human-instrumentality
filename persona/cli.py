@@ -10,7 +10,7 @@ from typing import List, Sequence
 import wave
 
 from .audio import AudioFrame, MicrophoneConfig, MicrophoneStream, write_wav
-from .llm import HuggingFacePersonaLLM, RuleBasedPersonaLLM
+from .llm import HuggingFacePersonaLLM, OpenRouterPersonaLLM, RuleBasedPersonaLLM
 from .models import (
     DEFAULT_PROFILE_NAME,
     apply_profile_defaults,
@@ -46,14 +46,25 @@ def build_pipeline(args: argparse.Namespace) -> PersonaPipeline:
             chunk_length_s=args.asr_chunk_length,
             decoder=args.asr_decoder,
         )
-        llm = HuggingFacePersonaLLM(
-            args.llm_model,
-            persona_name=args.persona_name,
-            persona_backstory=args.persona_backstory,
-            temperature=args.llm_temperature,
-            max_new_tokens=args.llm_max_new_tokens,
-            device_map=args.llm_device_map,
-        )
+        if args.llm_backend == "openrouter":
+            llm = OpenRouterPersonaLLM(
+                args.llm_model,
+                persona_name=args.persona_name,
+                persona_backstory=args.persona_backstory,
+                api_key=args.openrouter_api_key,
+                temperature=args.llm_temperature,
+                max_tokens=args.llm_max_new_tokens,
+                base_url=args.openrouter_base_url,
+            )
+        else:
+            llm = HuggingFacePersonaLLM(
+                args.llm_model,
+                persona_name=args.persona_name,
+                persona_backstory=args.persona_backstory,
+                temperature=args.llm_temperature,
+                max_new_tokens=args.llm_max_new_tokens,
+                device_map=args.llm_device_map,
+            )
         synthesizer = HuggingFaceSynthesizer(
             args.tts_model,
             vocoder_id=args.tts_vocoder,
@@ -376,7 +387,13 @@ def main() -> None:  # pragma: no cover - exercised via CLI usage
     parser.add_argument(
         "--llm-model",
         default=argparse.SUPPRESS,
-        help="Hugging Face LLM model identifier",
+        help="LLM model identifier (Hugging Face name or OpenRouter model)",
+    )
+    parser.add_argument(
+        "--llm-backend",
+        choices=("huggingface", "openrouter"),
+        default="huggingface",
+        help="LLM backend to use (huggingface or openrouter)",
     )
     parser.add_argument(
         "--llm-temperature",
@@ -394,6 +411,16 @@ def main() -> None:  # pragma: no cover - exercised via CLI usage
         "--llm-device-map",
         default="auto",
         help="Device map for accelerating large language model inference",
+    )
+    parser.add_argument(
+        "--openrouter-api-key",
+        default=None,
+        help="API key for OpenRouter (defaults to OPENROUTER_API_KEY)",
+    )
+    parser.add_argument(
+        "--openrouter-base-url",
+        default="https://openrouter.ai/api/v1",
+        help="Base URL for the OpenRouter OpenAI-compatible API",
     )
     parser.add_argument(
         "--tts-model",
@@ -434,15 +461,19 @@ def main() -> None:  # pragma: no cover - exercised via CLI usage
         return
 
     profile = get_model_profile(args.profile)
-    profile_fields = (
+    profile_fields = [
         "asr_model",
-        "llm_model",
         "tts_model",
         "tts_vocoder",
         "tts_speaker_dataset",
         "tts_speaker_sample",
-    )
+    ]
+    if args.llm_backend == "huggingface":
+        profile_fields.append("llm_model")
     apply_profile_defaults(args, profile, profile_fields)
+
+    if args.llm_backend == "openrouter" and not hasattr(args, "llm_model"):
+        parser.error("Provide --llm-model with an OpenRouter model identifier (e.g. openai/gpt-4o-mini)")
 
     pipeline = build_pipeline(args)
 

@@ -72,6 +72,24 @@ utterance with confidence, start/end timestamps, and optional memory summaries. 
 `--mic-backend pyaudio` if you prefer that capture stack or need WASAPI-specific
 behaviour on Windows.
 
+### Remote LLMs via OpenRouter
+
+You can bypass local LLM weights entirely by targeting the OpenRouter
+OpenAI-compatible endpoint:
+
+```bash
+python -m persona.cli \
+  --llm-backend openrouter \
+  --llm-model openai/gpt-4o-mini \
+  --input-wav path/to/input.wav
+```
+
+Supply `OPENROUTER_API_KEY` (or `--openrouter-api-key`) and note the privacy trade-
+off: transcripts, persona state summaries, and backstory text leave your machine and
+are subject to the retention policies of OpenRouter and the upstream model vendor.
+Avoid sending confidential data through this path and review the provider's terms
+before enabling it in production.
+
 ### Memory Introspection
 
 Markdown reflections accumulate in `--memory-dir` with microsecond timestamps. Each entry

@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Any, List, Mapping, Protocol
 
 import json
+import os
 import time
+
+import requests
 
 
 @dataclass
@@ -17,6 +20,37 @@ class LLMResponse:
     importance: float = 0.0
     summary: str | None = None
     state_updates: Mapping[str, Any] | None = None
+
+
+def _parse_structured_response(raw: str) -> LLMResponse:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = {
+            "reply": raw.strip(),
+            "log_memory": False,
+            "emotion": "neutral",
+            "importance": 0.3,
+            "summary": None,
+            "state_updates": None,
+        }
+
+    raw_importance = payload.get("importance", 0.0)
+    try:
+        importance = float(raw_importance)
+    except (TypeError, ValueError):
+        importance = 0.0
+    updates = payload.get("state_updates")
+    if not isinstance(updates, Mapping):
+        updates = None
+    return LLMResponse(
+        text=str(payload.get("reply", "")).strip(),
+        should_log_memory=bool(payload.get("log_memory", False)),
+        emotion=(payload.get("emotion") or "neutral"),
+        importance=max(0.0, min(1.0, importance)),
+        summary=payload.get("summary") if payload.get("summary") not in (None, "") else None,
+        state_updates=updates,
+    )
 
 
 class PersonaLLM(Protocol):
@@ -160,34 +194,7 @@ class HuggingFacePersonaLLM:
         ]
 
     def _parse_response(self, raw: str) -> LLMResponse:
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {
-                "reply": raw.strip(),
-                "log_memory": False,
-                "emotion": "neutral",
-                "importance": 0.3,
-                "summary": None,
-                "state_updates": None,
-            }
-
-        raw_importance = payload.get("importance", 0.0)
-        try:
-            importance = float(raw_importance)
-        except (TypeError, ValueError):
-            importance = 0.0
-        updates = payload.get("state_updates")
-        if not isinstance(updates, Mapping):
-            updates = None
-        return LLMResponse(
-            text=str(payload.get("reply", "")).strip(),
-            should_log_memory=bool(payload.get("log_memory", False)),
-            emotion=(payload.get("emotion") or "neutral"),
-            importance=max(0.0, min(1.0, importance)),
-            summary=payload.get("summary") if payload.get("summary") not in (None, "") else None,
-            state_updates=updates,
-        )
+        return _parse_structured_response(raw)
 
     def generate_reply(
         self,
@@ -249,3 +256,119 @@ class HuggingFacePersonaLLM:
             raw_text = outputs[0]["generated_text"]
 
         return raw_text
+
+
+class OpenRouterPersonaLLM:
+    """Persona-aware response generator backed by the OpenRouter API."""
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        persona_name: str = "Astra",
+        persona_backstory: str | None = None,
+        api_key: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 256,
+        base_url: str = "https://openrouter.ai/api/v1",
+        request_timeout: float = 30.0,
+    ) -> None:
+        self.model = model
+        self.persona_backstory = persona_backstory or (
+            f"You are {persona_name}, an empathetic AI companion who listens closely and "
+            "offers thoughtful, emotionally aware replies."
+        )
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.base_url = base_url.rstrip("/")
+        self.request_timeout = request_timeout
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "OpenRouter API key not provided. Set OPENROUTER_API_KEY or pass api_key."
+            )
+
+    def _build_prompt(
+        self,
+        transcript: str,
+        memories: List[str] | None,
+        persona_state: List[str] | None,
+        sentiment: str | None,
+    ) -> List[dict[str, str]]:
+        memory_lines = "\n".join(f"- {memory}" for memory in (memories or []))
+        memory_block = (
+            "Relevant memories you recall from past conversations:\n"
+            f"{memory_lines}\n\n"
+            if memory_lines
+            else ""
+        )
+        state_lines = "\n".join(f"- {line}" for line in (persona_state or []))
+        state_block = (
+            "Current persona state and preferences:\n"
+            f"{state_lines}\n\n"
+            if state_lines
+            else ""
+        )
+        sentiment_block = f"Observed sentiment: {sentiment}\n\n" if sentiment else ""
+        return [
+            {
+                "role": "system",
+                "content": (
+                    f"{self.persona_backstory}\n"
+                    "Always answer in JSON with the following schema:\n"
+                    "{\n"
+                    '  "reply": string,\n'
+                    '  "log_memory": boolean,\n'
+                    '  "emotion": string,\n'
+                    '  "importance": number between 0 and 1,\n'
+                    '  "summary": string or null,\n'
+                    '  "state_updates": object with optional medium_term, hobbies, artistic_likes, relationships\n'
+                    "}\n"
+                    "The reply should be natural conversational text."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{memory_block}{state_block}{sentiment_block}Latest user transcript:\n{transcript}",
+            },
+        ]
+
+    def _invoke_api(self, messages: List[dict[str, str]]) -> str:
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            },
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        choices = payload.get("choices")
+        if not choices:
+            raise ValueError("OpenRouter returned no choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if not content:
+            raise ValueError("OpenRouter returned empty content")
+        return str(content)
+
+    def generate_reply(
+        self,
+        transcript: str,
+        memories: List[str] | None = None,
+        persona_state: List[str] | None = None,
+        sentiment: str | None = None,
+    ) -> LLMResponse:
+        messages = self._build_prompt(transcript, memories, persona_state, sentiment)
+        raw_text = self._invoke_api(messages)
+        response = _parse_structured_response(raw_text)
+        if not response.text:
+            raise ValueError("LLM returned empty reply")
+        return response
