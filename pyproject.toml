@@ -15,11 +15,15 @@ dependencies = [
     "datasets>=2.18",
     "torch>=2.2",
     "sentence-transformers>=2.7",
+    "webrtcvad>=2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+]
+audio = [
+    "rnnoise>=0.4",
 ]
 
 [tool.pytest.ini_options]
