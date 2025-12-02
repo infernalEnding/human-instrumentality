@@ -10,6 +10,7 @@ from .emotion import AudioEmotionAnalyzer, AudioEmotionResult
 from .denoiser import Denoiser, NoOpDenoiser
 from .llm import PersonaLLM
 from .memory import MemoryLogger
+from .narrative import NarrativeStore, make_event
 from .planner import ResponsePlan, ResponsePlanner
 from .sentiment import SentimentAnalyzer
 from .state import PersonaStateManager
@@ -42,10 +43,13 @@ class PersonaPipeline:
         synthesizer: SpeechSynthesizer,
         memory_logger: MemoryLogger | None = None,
         persona_state_manager: PersonaStateManager | None = None,
+        narrative_store: NarrativeStore | None = None,
         sentiment_analyzer: SentimentAnalyzer | None = None,
         audio_emotion_analyzer: AudioEmotionAnalyzer | None = None,
         memory_window: int = 3,
         memory_importance_threshold: float = 0.5,
+        narrative_importance_threshold: float | None = None,
+        narrative_window: int | None = None,
     ) -> None:
         if vad_factory is None:
             if vad is None:
@@ -62,30 +66,45 @@ class PersonaPipeline:
         self.synthesizer = synthesizer
         self.memory_logger = memory_logger
         self.persona_state_manager = persona_state_manager
+        self.narrative_store = narrative_store
         self.sentiment_analyzer = sentiment_analyzer
         self.audio_emotion_analyzer = audio_emotion_analyzer
         self.memory_window = max(0, memory_window)
         self.memory_importance_threshold = max(0.0, memory_importance_threshold)
+        self.narrative_importance_threshold = (
+            narrative_importance_threshold
+            if narrative_importance_threshold is not None
+            else self.memory_importance_threshold
+        )
+        self.narrative_window = (
+            max(0, narrative_window)
+            if narrative_window is not None
+            else max(0, self.memory_window)
+        )
 
-    def process_frames(self, frames: Iterable[AudioFrame]) -> List[PipelineOutput]:
+    def process_frames(
+        self, frames: Iterable[AudioFrame], *, speaker_ctx: object | None = None
+    ) -> List[PipelineOutput]:
         self.vad.reset()
         self.denoiser.reset()
         outputs: List[PipelineOutput] = []
         for frame in frames:
-            outputs.extend(self.process_stream_frame(frame))
-        outputs.extend(self.flush())
+            outputs.extend(self.process_stream_frame(frame, speaker_ctx=speaker_ctx))
+        outputs.extend(self.flush(speaker_ctx=speaker_ctx))
         return outputs
 
-    def process_stream_frame(self, frame: AudioFrame) -> List[PipelineOutput]:
+    def process_stream_frame(
+        self, frame: AudioFrame, *, speaker_ctx: object | None = None
+    ) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
         frame = self.denoiser.process_frame(frame)
         decisions = self.vad.process_frame(frame)
-        outputs.extend(self._consume_decisions(decisions))
+        outputs.extend(self._consume_decisions(decisions, speaker_ctx=speaker_ctx))
         return outputs
 
-    def flush(self) -> List[PipelineOutput]:
+    def flush(self, *, speaker_ctx: object | None = None) -> List[PipelineOutput]:
         decisions = self.vad.flush()
-        return self._consume_decisions(decisions)
+        return self._consume_decisions(decisions, speaker_ctx=speaker_ctx)
 
     def process_utterance(
         self,
@@ -150,7 +169,9 @@ class PersonaPipeline:
             )
         else:
             memory_text = []
-        persona_state = self._prepare_prompt_context()
+        persona_state = self._prepare_prompt_context(
+            speaker_id=speaker_id if speaker_id is not None else None
+        )
         llm_response = self.llm.generate_reply(
             transcript_text,
             memory_text,
@@ -181,6 +202,7 @@ class PersonaPipeline:
                 speaker_id=speaker_id,
             )
         self._persist_state_updates(plan)
+        self._persist_narrative_event(plan, speaker_id=speaker_id)
         audio = self.synthesizer.synthesize(plan.response_text)
         return PipelineOutput(
             transcription=transcript_text,
@@ -192,14 +214,37 @@ class PersonaPipeline:
             speaker_ctx=speaker_ctx,
         )
 
-    def _prepare_prompt_context(self) -> List[str] | None:
+    def _prepare_prompt_context(
+        self, *, speaker_id: str | None = None
+    ) -> List[str] | None:
+        context: list[str] = []
         if self.persona_state_manager:
-            return self.persona_state_manager.prompt_context()
-        return None
+            context.extend(self.persona_state_manager.prompt_context())
+        if self.narrative_store and self.narrative_window > 0:
+            context.extend(
+                self.narrative_store.format_context(
+                    speaker_id=speaker_id, limit=self.narrative_window
+                )
+            )
+        return context or None
 
     def _persist_state_updates(self, plan: ResponsePlan) -> None:
         if self.persona_state_manager and plan.state_updates:
             self.persona_state_manager.apply_updates(plan.state_updates)
+
+    def _persist_narrative_event(
+        self, plan: ResponsePlan, *, speaker_id: str | None
+    ) -> None:
+        if not self.narrative_store or not plan.narrative:
+            return
+        if plan.importance < self.narrative_importance_threshold:
+            return
+        event = make_event(
+            plan.narrative,
+            tags=plan.memory_tags,
+            speaker_id=speaker_id,
+        )
+        self.narrative_store.add_event(event)
 
 
 class DiscordSpeakerPipeline(PersonaPipeline):
@@ -224,9 +269,11 @@ class DiscordSpeakerPipeline(PersonaPipeline):
         )
         self._session_initialised = True
 
-    def _prepare_prompt_context(self) -> List[str] | None:
+    def _prepare_prompt_context(
+        self, *, speaker_id: str | None = None
+    ) -> List[str] | None:
         self._ensure_relationship()
-        base_context = super()._prepare_prompt_context() or []
+        base_context = super()._prepare_prompt_context(speaker_id=speaker_id) or []
         if not self._relationship_record:
             return base_context
         hints = [
