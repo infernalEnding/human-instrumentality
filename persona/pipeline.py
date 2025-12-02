@@ -100,15 +100,18 @@ class PersonaPipeline:
         transcript_text = transcription.text.strip() if transcription.text else ""
         if not transcript_text:
             return None
-        speaker_id = None
+        speaker_id: str | int | None = None
         if speaker_ctx is not None:
             speaker_id = getattr(speaker_ctx, "user_id", None)
         if speaker_id is None and isinstance(self, DiscordSpeakerPipeline):
             speaker_id = self.speaker_id
+        elif speaker_id is not None:
+            speaker_id = str(speaker_id)
         if self.memory_logger:
             memory_text = self.memory_logger.format_entries_for_prompt(
                 limit=self.memory_window,
                 min_importance=self.memory_importance_threshold,
+                speaker_id=speaker_id,
             )
         else:
             memory_text = []
