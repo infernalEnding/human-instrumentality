@@ -22,6 +22,7 @@ class PipelineOutput:
     audio: SynthesizedAudio
     start_time: float | None = None
     end_time: float | None = None
+    speaker_ctx: object | None = None
 
 
 class PersonaPipeline:
@@ -66,15 +67,35 @@ class PersonaPipeline:
         decisions = self.vad.flush()
         return self._consume_decisions(decisions)
 
-    def _consume_decisions(self, decisions: Iterable[VADDecision]) -> List[PipelineOutput]:
+    def process_utterance(
+        self,
+        segment: AudioSegment,
+        *,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        speaker_ctx: object | None = None,
+    ) -> PipelineOutput | None:
+        decision = VADDecision(
+            segment=segment,
+            confidence=1.0,
+            start_time=start_time or segment.start_time,
+            end_time=end_time or segment.end_time,
+        )
+        return self._process_segment(decision, speaker_ctx=speaker_ctx)
+
+    def _consume_decisions(
+        self, decisions: Iterable[VADDecision], *, speaker_ctx: object | None = None
+    ) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
         for decision in decisions:
-            output = self._process_segment(decision)
+            output = self._process_segment(decision, speaker_ctx=speaker_ctx)
             if output:
                 outputs.append(output)
         return outputs
 
-    def _process_segment(self, decision: VADDecision) -> PipelineOutput | None:
+    def _process_segment(
+        self, decision: VADDecision, *, speaker_ctx: object | None = None
+    ) -> PipelineOutput | None:
         transcription = self.transcriber.transcribe(decision.segment)
         transcript_text = transcription.text.strip() if transcription.text else ""
         if not transcript_text:
@@ -123,4 +144,5 @@ class PersonaPipeline:
             audio=audio,
             start_time=transcription.start_time,
             end_time=transcription.end_time,
+            speaker_ctx=speaker_ctx,
         )
