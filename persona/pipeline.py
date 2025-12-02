@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Callable, Iterable, List
 
 from .audio import AudioFrame, AudioSegment
+from .denoiser import Denoiser, NoOpDenoiser
 from .llm import PersonaLLM
 from .memory import MemoryLogger
 from .planner import ResponsePlan, ResponsePlanner
 from .state import PersonaStateManager
 from .stt import Transcriber
 from .tts import SpeechSynthesizer, SynthesizedAudio
-from .vad import EnergyVAD, VADDecision
+from .vad import EnergyVAD, VADDecision, VoiceActivityDetector
 
 
 @dataclass
@@ -29,7 +30,9 @@ class PersonaPipeline:
     def __init__(
         self,
         *,
-        vad: EnergyVAD,
+        vad: VoiceActivityDetector | None = None,
+        vad_factory: Callable[[], VoiceActivityDetector] | None = None,
+        denoiser_factory: Callable[[], Denoiser] | None = None,
         transcriber: Transcriber,
         llm: PersonaLLM,
         planner: ResponsePlanner,
@@ -39,7 +42,15 @@ class PersonaPipeline:
         memory_window: int = 3,
         memory_importance_threshold: float = 0.5,
     ) -> None:
-        self.vad = vad
+        if vad_factory is None:
+            if vad is None:
+                vad_factory = lambda: EnergyVAD()
+            else:
+                vad_factory = lambda: vad
+        self.vad_factory = vad_factory
+        self.vad = self.vad_factory()
+        self.denoiser_factory = denoiser_factory or (lambda: NoOpDenoiser())
+        self.denoiser = self.denoiser_factory()
         self.transcriber = transcriber
         self.llm = llm
         self.planner = planner
@@ -51,6 +62,7 @@ class PersonaPipeline:
 
     def process_frames(self, frames: Iterable[AudioFrame]) -> List[PipelineOutput]:
         self.vad.reset()
+        self.denoiser.reset()
         outputs: List[PipelineOutput] = []
         for frame in frames:
             outputs.extend(self.process_stream_frame(frame))
@@ -59,6 +71,7 @@ class PersonaPipeline:
 
     def process_stream_frame(self, frame: AudioFrame) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
+        frame = self.denoiser.process_frame(frame)
         decisions = self.vad.process_frame(frame)
         outputs.extend(self._consume_decisions(decisions))
         return outputs
@@ -74,7 +87,10 @@ class PersonaPipeline:
         start_time: float | None = None,
         end_time: float | None = None,
         speaker_ctx: object | None = None,
+        already_denoised: bool = False,
     ) -> PipelineOutput | None:
+        if not already_denoised:
+            segment = self._denoise_segment(segment)
         decision = VADDecision(
             segment=segment,
             confidence=1.0,
@@ -92,6 +108,10 @@ class PersonaPipeline:
             if output:
                 outputs.append(output)
         return outputs
+
+    def _denoise_segment(self, segment: AudioSegment) -> AudioSegment:
+        frames = [self.denoiser.process_frame(frame) for frame in segment.frames]
+        return AudioSegment(frames=frames)
 
     def _process_segment(
         self, decision: VADDecision, *, speaker_ctx: object | None = None
@@ -141,7 +161,7 @@ class PersonaPipeline:
                 importance=log_importance,
                 summary=plan.memory_summary,
                 speaker_id=speaker_id,
-            )
+        )
         self._persist_state_updates(plan)
         audio = self.synthesizer.synthesize(plan.response_text)
         return PipelineOutput(

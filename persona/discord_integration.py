@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from typing import Callable, Deque, Dict, Iterable, Optional
 
 from .audio import AudioBuffer, AudioFrame, AudioSegment
+from .denoiser import Denoiser, NoOpDenoiser
 from .pipeline import PersonaPipeline
-from .vad import EnergyVAD
+from .vad import EnergyVAD, VoiceActivityDetector
 
 
 @dataclass
@@ -28,12 +29,14 @@ class SpeakerSession:
         context: SpeakerContext,
         sample_rate: int,
         channels: int,
-        vad_factory: Callable[[], EnergyVAD] | None = None,
+        vad_factory: Callable[[], VoiceActivityDetector] | None = None,
+        denoiser_factory: Callable[[], Denoiser] | None = None,
     ) -> None:
         self.context = context
         self.sample_rate = sample_rate
         self.channels = channels
         self.vad = vad_factory() if vad_factory else EnergyVAD()
+        self.denoiser = denoiser_factory() if denoiser_factory else NoOpDenoiser()
         self.audio_buffer = AudioBuffer()
         self._timestamp = 0.0
         self.completed_segments: Deque[AudioSegment] = deque()
@@ -46,6 +49,7 @@ class SpeakerSession:
             timestamp=self._timestamp,
         )
         self._timestamp += frame.duration_seconds
+        frame = self.denoiser.process_frame(frame)
         self.audio_buffer.append(frame)
         decisions = self.vad.process_frame(frame)
         return self._handle_decisions(decisions)
@@ -85,7 +89,8 @@ class DiscordVoiceBridge:
         send_audio: Callable[[bytes], None],
         on_transcript: Optional[Callable[..., None]] = None,
         frame_duration_s: float = 0.02,
-        vad_factory: Callable[[], EnergyVAD] | None = None,
+        vad_factory: Callable[[], VoiceActivityDetector] | None = None,
+        denoiser_factory: Callable[[], Denoiser] | None = None,
     ) -> None:
         self.pipeline = pipeline
         self.send_audio = send_audio
@@ -93,6 +98,7 @@ class DiscordVoiceBridge:
         self.frame_duration_s = frame_duration_s
         self._timestamp = 0.0
         self.vad_factory = vad_factory
+        self.denoiser_factory = denoiser_factory
         self.sessions: Dict[int, SpeakerSession] = {}
         self.ssrc_to_user_id: Dict[int, int] = {}
         self._speaker_contexts: Dict[int, SpeakerContext] = {}
@@ -162,7 +168,8 @@ class DiscordVoiceBridge:
                 context=context,
                 sample_rate=sample_rate,
                 channels=channels,
-                vad_factory=self.vad_factory,
+                vad_factory=self.vad_factory or self.pipeline.vad_factory,
+                denoiser_factory=self.denoiser_factory or self.pipeline.denoiser_factory,
             )
             self.sessions[user_id] = session
 
