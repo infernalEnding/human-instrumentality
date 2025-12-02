@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
+from .embeddings import EmbeddingIndex, EmbeddingMatch, EmbeddingMetadata, TextEmbedder
+
 
 @dataclass
 class MemoryEntry:
@@ -27,6 +29,8 @@ class MemoryLogger:
         default_tags: Sequence[str] | None = None,
         importance_threshold: float = 0.55,
         cooldown_seconds: float = 45.0,
+        embedder: TextEmbedder | None = None,
+        embedding_index: EmbeddingIndex | None = None,
     ) -> None:
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +39,8 @@ class MemoryLogger:
         self.importance_threshold = importance_threshold
         self.cooldown = timedelta(seconds=cooldown_seconds)
         self._last_logged_at: datetime | None = None
+        self.embedder = embedder
+        self.embedding_index = embedding_index
         self._keyword_triggers = {
             "remember",
             "promise",
@@ -76,6 +82,18 @@ class MemoryLogger:
         )
         path.write_text(content, encoding="utf-8")
         self._last_logged_at = timestamp
+        metadata = self._build_metadata(
+            key=safe_name,
+            summary=summary_text,
+            importance=importance,
+            speaker_id=speaker_id,
+            source=str(path),
+        )
+        self._index_entry(
+            metadata=metadata,
+            transcript=transcript,
+            response=response,
+        )
         return MemoryEntry(
             path=path,
             timestamp=timestamp,
@@ -158,6 +176,28 @@ class MemoryLogger:
             formatted.append(f"{entry.summary} ({'; '.join(metadata)})")
         return formatted
 
+    def recall_for_prompt(
+        self,
+        *,
+        transcript: str,
+        limit: int = 3,
+        min_importance: float = 0.4,
+        speaker_id: str | int | None = None,
+    ) -> List[str]:
+        if not transcript or limit <= 0:
+            return []
+        speaker = str(speaker_id) if speaker_id is not None else None
+        if self.embedder and self.embedding_index:
+            return self._semantic_recall(
+                transcript=transcript,
+                limit=limit,
+                min_importance=min_importance,
+                speaker_id=speaker,
+            )
+        return self.format_entries_for_prompt(
+            limit=limit, min_importance=min_importance, speaker_id=speaker
+        )
+
     def retrieve(
         self,
         query_terms: Iterable[str],
@@ -214,6 +254,79 @@ class MemoryLogger:
         if self._last_logged_at and now - self._last_logged_at < self.cooldown:
             score -= 0.2
         return score >= self.importance_threshold
+
+    def _build_metadata(
+        self,
+        *,
+        key: str,
+        summary: str,
+        importance: float,
+        speaker_id: str | int | None,
+        source: str | None,
+    ) -> EmbeddingMetadata:
+        speaker = str(speaker_id) if speaker_id is not None else None
+        return EmbeddingMetadata(
+            key=key,
+            summary=summary,
+            speaker_id=speaker,
+            importance=importance,
+            source=source,
+        )
+
+    def _index_entry(
+        self,
+        *,
+        metadata: EmbeddingMetadata,
+        transcript: str,
+        response: str,
+    ) -> None:
+        if not self.embedder or not self.embedding_index:
+            return
+        text = "\n".join(
+            (
+                f"Summary: {metadata.summary}",
+                f"Transcript: {transcript}",
+                f"Response: {response}",
+            )
+        )
+        try:
+            vector = self.embedder.embed([text])[0]
+        except Exception:
+            return
+        self.embedding_index.add(vector=vector, metadata=metadata)
+
+    def _semantic_recall(
+        self,
+        *,
+        transcript: str,
+        limit: int,
+        min_importance: float,
+        speaker_id: str | None,
+    ) -> List[str]:
+        if not self.embedder or not self.embedding_index:
+            return []
+        try:
+            query_vec = self.embedder.embed([transcript])[0]
+        except Exception:
+            return []
+        matches = self.embedding_index.search(
+            query=query_vec,
+            limit=limit,
+            speaker_id=speaker_id,
+            min_importance=min_importance,
+        )
+        return [self._format_match(match) for match in matches]
+
+    def _format_match(self, match: EmbeddingMatch) -> str:
+        metadata = match.metadata
+        speaker_hint = (
+            f"speaker={metadata.speaker_id}" if metadata.speaker_id is not None else ""
+        )
+        source_hint = f"source={metadata.source}" if metadata.source else ""
+        hints = [hint for hint in (speaker_hint, source_hint) if hint]
+        hints.append(f"importance={metadata.importance:.2f}")
+        hints.append(f"score={match.score:.2f}")
+        return f"{metadata.summary} ({'; '.join(hints)})"
 
     def _render_markdown(
         self,
