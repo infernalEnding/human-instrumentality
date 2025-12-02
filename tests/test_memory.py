@@ -41,6 +41,22 @@ def test_memory_should_log_heuristics(tmp_path) -> None:
     )
 
 
+def test_memory_logger_adds_user_tag(tmp_path) -> None:
+    logger = MemoryLogger(tmp_path)
+    entry = logger.log(
+        transcript="Chatting with a user",
+        response="Responded",
+        emotion=None,
+        importance=0.7,
+        summary="User chat",
+        tags=("custom",),
+        speaker_id="42",
+    )
+
+    assert "custom" in entry.tags
+    assert "user:42" in entry.tags
+
+
 def test_memory_list_and_retrieve(tmp_path) -> None:
     logger = MemoryLogger(tmp_path)
     first = logger.log(

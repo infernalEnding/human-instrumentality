@@ -53,12 +53,18 @@ class MemoryLogger:
         importance: float,
         summary: str | None = None,
         tags: Sequence[str] | None = None,
+        speaker_id: str | int | None = None,
     ) -> MemoryEntry:
         timestamp = datetime.utcnow()
         summary_text = summary or transcript[:120]
         safe_name = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
         path = self.base_dir / f"{safe_name}.md"
-        tag_values = tuple(tags or self._auto_tags(transcript, response, emotion))
+        tag_values = list(tags or self._auto_tags(transcript, response, emotion))
+        if speaker_id is not None:
+            user_tag = f"user:{speaker_id}"
+            if user_tag not in tag_values:
+                tag_values.append(user_tag)
+        tag_values = tuple(tag_values)
         content = self._render_markdown(
             timestamp=timestamp,
             transcript=transcript,

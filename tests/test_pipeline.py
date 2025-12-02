@@ -3,7 +3,8 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-from persona.audio import AudioFrame
+from persona.audio import AudioFrame, AudioSegment
+from persona.discord_integration import SpeakerContext
 from persona.llm import LLMResponse, RuleBasedPersonaLLM
 from persona.memory import MemoryLogger
 from persona.pipeline import PersonaPipeline
@@ -266,6 +267,29 @@ def test_pipeline_clamps_importance_before_logging(tmp_path: Path) -> None:
     assert memory_files
     content = memory_files[0].read_text(encoding="utf-8")
     assert "Importance: 1.00" in content
+
+
+def test_pipeline_logs_speaker_identifier(tmp_path: Path) -> None:
+    segment = AudioSegment(
+        frames=[AudioFrame(pcm=b"\x01\x00" * 80, sample_rate=16000, channels=1, timestamp=0.0)]
+    )
+    speaker_ctx = SpeakerContext(
+        guild_id=None, channel_id=None, user_id=99, display_name="Tester"
+    )
+    pipeline = PersonaPipeline(
+        vad=EnergyVAD(threshold=0.05, min_speech_frames=2, max_silence_frames=1),
+        transcriber=ScriptedTranscriber("Logging speaker"),
+        llm=OverconfidentLLM(),
+        planner=ResponsePlanner(),
+        synthesizer=DebugSynthesizer(),
+        memory_logger=MemoryLogger(tmp_path),
+    )
+
+    pipeline.process_utterance(segment, speaker_ctx=speaker_ctx)
+
+    entries = pipeline.memory_logger.list_entries()
+    assert entries
+    assert f"user:{speaker_ctx.user_id}" in entries[0].tags
 
 
 def test_pipeline_updates_persona_state(tmp_path: Path) -> None:
