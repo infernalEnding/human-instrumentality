@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
 from .audio import AudioFrame
+from .denoise import Denoiser, RNNoiseDenoiser
 from .pipeline import PersonaPipeline
+from .vad import EnergyVAD, VAD, WebRTCVAD
 
 
 @dataclass
@@ -16,6 +18,10 @@ class DiscordConfig:
     channel_id: int | None = None
     persona_name: str = "Astra"
     input_mode: str = "bot"  # or "microphone"
+    enable_webrtc_vad: bool = False
+    enable_rnnoise_denoiser: bool = False
+    webrtc_sample_rate: int = 16000
+    webrtc_frame_ms: int = 20
 
 
 class DiscordVoiceBridge:
@@ -32,7 +38,7 @@ class DiscordVoiceBridge:
         send_audio: Callable[[bytes], None],
         on_transcript: Optional[Callable[..., None]] = None,
         frame_duration_s: float = 0.02,
-    ) -> None:
+        ) -> None:
         self.pipeline = pipeline
         self.send_audio = send_audio
         self.on_transcript = on_transcript
@@ -66,3 +72,30 @@ class DiscordVoiceBridge:
                 except TypeError:
                     self.on_transcript(output.transcription)
             self.send_audio(output.audio.payload)
+
+
+def build_discord_vad(config: DiscordConfig) -> VAD:
+    """Choose the best-effort VAD backend for Discord ingestion."""
+
+    if config.enable_webrtc_vad:
+        try:
+            return WebRTCVAD(
+                sample_rate=config.webrtc_sample_rate,
+                frame_duration_ms=config.webrtc_frame_ms,
+            )
+        except Exception:
+            # Fall back to the energy detector when the optional dependency is missing
+            pass
+    return EnergyVAD()
+
+
+def build_discord_denoiser(config: DiscordConfig) -> Denoiser | None:
+    """Optionally enable RNNoise for Discord ingestion."""
+
+    if not config.enable_rnnoise_denoiser:
+        return None
+
+    try:
+        return RNNoiseDenoiser(sample_rate=config.webrtc_sample_rate)
+    except Exception:
+        return None

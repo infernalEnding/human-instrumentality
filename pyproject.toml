@@ -20,6 +20,10 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
+audio = [
+    "webrtcvad>=2.0.10",
+    "rnnoise>=0.4.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

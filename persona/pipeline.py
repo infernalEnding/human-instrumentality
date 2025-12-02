@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import Iterable, List
 
 from .audio import AudioFrame, AudioSegment
+from .denoise import Denoiser
 from .llm import PersonaLLM
 from .memory import MemoryLogger
 from .planner import ResponsePlan, ResponsePlanner
 from .state import PersonaStateManager
 from .stt import Transcriber
 from .tts import SpeechSynthesizer, SynthesizedAudio
-from .vad import EnergyVAD, VADDecision
+from .vad import VAD, VADDecision
 
 
 @dataclass
@@ -28,7 +29,8 @@ class PersonaPipeline:
     def __init__(
         self,
         *,
-        vad: EnergyVAD,
+        vad: VAD,
+        denoiser: Denoiser | None = None,
         transcriber: Transcriber,
         llm: PersonaLLM,
         planner: ResponsePlanner,
@@ -39,6 +41,7 @@ class PersonaPipeline:
         memory_importance_threshold: float = 0.5,
     ) -> None:
         self.vad = vad
+        self.denoiser = denoiser
         self.transcriber = transcriber
         self.llm = llm
         self.planner = planner
@@ -49,7 +52,7 @@ class PersonaPipeline:
         self.memory_importance_threshold = max(0.0, memory_importance_threshold)
 
     def process_frames(self, frames: Iterable[AudioFrame]) -> List[PipelineOutput]:
-        self.vad.reset()
+        self._reset_processors()
         outputs: List[PipelineOutput] = []
         for frame in frames:
             outputs.extend(self.process_stream_frame(frame))
@@ -58,13 +61,24 @@ class PersonaPipeline:
 
     def process_stream_frame(self, frame: AudioFrame) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
-        decisions = self.vad.process_frame(frame)
+        processed = self._denoise_frame(frame)
+        decisions = self.vad.process_frame(processed)
         outputs.extend(self._consume_decisions(decisions))
         return outputs
 
     def flush(self) -> List[PipelineOutput]:
         decisions = self.vad.flush()
         return self._consume_decisions(decisions)
+
+    def _reset_processors(self) -> None:
+        self.vad.reset()
+        if self.denoiser:
+            self.denoiser.reset()
+
+    def _denoise_frame(self, frame: AudioFrame) -> AudioFrame:
+        if not self.denoiser:
+            return frame
+        return self.denoiser.process_frame(frame)
 
     def _consume_decisions(self, decisions: Iterable[VADDecision]) -> List[PipelineOutput]:
         outputs: List[PipelineOutput] = []
