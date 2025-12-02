@@ -108,7 +108,8 @@ class PersonaPipeline:
         elif speaker_id is not None:
             speaker_id = str(speaker_id)
         if self.memory_logger:
-            memory_text = self.memory_logger.format_entries_for_prompt(
+            memory_text = self.memory_logger.recall_for_prompt(
+                transcript=transcript_text,
                 limit=self.memory_window,
                 min_importance=self.memory_importance_threshold,
                 speaker_id=speaker_id,
