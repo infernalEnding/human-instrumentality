@@ -19,6 +19,7 @@ class PersonaRelationship:
     notes: str | None = None
     discord_ids: tuple[str, ...] = ()
     sentiment: str | None = None
+    needs_identification: bool = False
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -28,6 +29,7 @@ class PersonaRelationship:
             "notes": self.notes,
             "discord_ids": list(self.discord_ids),
             "sentiment": self.sentiment,
+            "needs_identification": self.needs_identification,
         }
 
 
@@ -112,6 +114,42 @@ class PersonaStateManager:
         """Return a deep-ish copy suitable for inspection or serialization."""
 
         return json.loads(json.dumps(self._state))
+
+    def get_or_create_discord_relationship(
+        self, user_id: str, display_name: str | None = None
+    ) -> Dict[str, Any]:
+        """Retrieve or create a relationship record keyed by a Discord user ID."""
+
+        user_id = str(user_id).strip()
+        if not user_id:
+            raise ValueError("user_id is required to track Discord relationships")
+        for rel in self._state["relationships"].values():
+            ids = rel.get("discord_ids") or []
+            if user_id in ids:
+                return json.loads(json.dumps(rel))
+
+        base_name = (str(display_name).strip() or "Unknown Discord contact").strip()
+        record = PersonaRelationship(
+            name=base_name or "Unknown Discord contact",
+            discord_ids=(user_id,),
+            notes=(f"Discord handle: {display_name}" if display_name else None),
+            needs_identification=True,
+        ).to_payload()
+
+        candidate_name = record["name"]
+        key = self._relationship_key(candidate_name)
+        suffix = 1
+        while key in self._state["relationships"]:
+            existing_ids = self._state["relationships"][key].get("discord_ids") or []
+            if user_id in existing_ids:
+                return json.loads(json.dumps(self._state["relationships"][key]))
+            suffix += 1
+            candidate_name = f"{record['name']} ({suffix})"
+            key = self._relationship_key(candidate_name)
+        record["name"] = candidate_name
+        self._state["relationships"][key] = record
+        self._save_state()
+        return json.loads(json.dumps(record))
 
     def prompt_context(
         self,
@@ -209,6 +247,7 @@ class PersonaStateManager:
             notes=(str(entry.get("notes")) if entry.get("notes") else None),
             discord_ids=tuple(sorted(discord_values)),
             sentiment=(str(entry.get("sentiment")) if entry.get("sentiment") else None),
+            needs_identification=bool(entry.get("needs_identification", False)),
         )
 
     def _clamp_float(self, value: Any, *, minimum: float = 0.0, maximum: float = 1.0) -> float:

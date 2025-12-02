@@ -15,7 +15,7 @@ from .models import (
 )
 from .state import PersonaStateManager
 from .tts import DebugSynthesizer, HuggingFaceSynthesizer, SynthesizedAudio, SpeechSynthesizer
-from .pipeline import PersonaPipeline, PipelineOutput
+from .pipeline import DiscordSpeakerPipeline, PersonaPipeline, PipelineOutput
 
 __all__ = [
     "AudioFrame",
@@ -39,6 +39,7 @@ __all__ = [
     "DebugSynthesizer",
     "HuggingFaceSynthesizer",
     "PersonaPipeline",
+    "DiscordSpeakerPipeline",
     "PipelineOutput",
     "ModelProfile",
     "list_model_profiles",

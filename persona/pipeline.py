@@ -86,10 +86,7 @@ class PersonaPipeline:
             )
         else:
             memory_text = []
-        if self.persona_state_manager:
-            persona_state = self.persona_state_manager.prompt_context()
-        else:
-            persona_state = None
+        persona_state = self._prepare_prompt_context()
         llm_response = self.llm.generate_reply(
             transcript_text,
             memory_text,
@@ -114,8 +111,7 @@ class PersonaPipeline:
                 importance=log_importance,
                 summary=plan.memory_summary,
             )
-        if self.persona_state_manager and plan.state_updates:
-            self.persona_state_manager.apply_updates(plan.state_updates)
+        self._persist_state_updates(plan)
         audio = self.synthesizer.synthesize(plan.response_text)
         return PipelineOutput(
             transcription=transcript_text,
@@ -124,3 +120,83 @@ class PersonaPipeline:
             start_time=transcription.start_time,
             end_time=transcription.end_time,
         )
+
+    def _prepare_prompt_context(self) -> List[str] | None:
+        if self.persona_state_manager:
+            return self.persona_state_manager.prompt_context()
+        return None
+
+    def _persist_state_updates(self, plan: ResponsePlan) -> None:
+        if self.persona_state_manager and plan.state_updates:
+            self.persona_state_manager.apply_updates(plan.state_updates)
+
+
+class DiscordSpeakerPipeline(PersonaPipeline):
+    def __init__(
+        self,
+        *,
+        speaker_id: str,
+        speaker_display_name: str | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.speaker_id = str(speaker_id)
+        self.speaker_display_name = speaker_display_name
+        self._relationship_record: dict | None = None
+        self._session_initialised = False
+
+    def _ensure_relationship(self) -> None:
+        if self._session_initialised or not self.persona_state_manager:
+            return
+        self._relationship_record = self.persona_state_manager.get_or_create_discord_relationship(
+            self.speaker_id, display_name=self.speaker_display_name
+        )
+        self._session_initialised = True
+
+    def _prepare_prompt_context(self) -> List[str] | None:
+        self._ensure_relationship()
+        base_context = super()._prepare_prompt_context() or []
+        if not self._relationship_record:
+            return base_context
+        hints = [
+            "Discord safety: greet the speaker and confirm their preferred name and consent to chat.",
+        ]
+        if self.speaker_display_name:
+            hints.append(f"Discord handle: {self.speaker_display_name}")
+        if self._relationship_record.get("needs_identification"):
+            hints.append(
+                "This contact still needs identification—politely ask for their name and whether it's okay to continue."
+            )
+        return base_context + hints
+
+    def _persist_state_updates(self, plan: ResponsePlan) -> None:
+        if not self.persona_state_manager or not plan.state_updates:
+            return
+        relationships = plan.state_updates.get("relationships")
+        removals: list[dict] = []
+        if isinstance(relationships, list):
+            for rel in relationships:
+                if not isinstance(rel, dict):
+                    continue
+                ids = rel.get("discord_ids") or []
+                is_match = self.speaker_id in ids or not ids
+                if self._relationship_record and not is_match:
+                    recorded_name = self._relationship_record.get("name", "").strip().lower()
+                    rel_name = str(rel.get("name", "")).strip().lower()
+                    is_match = recorded_name and recorded_name == rel_name
+                if not is_match:
+                    continue
+                if self._relationship_record:
+                    existing_name = self._relationship_record.get("name")
+                    updated_name = rel.get("name")
+                    if existing_name and updated_name and existing_name != updated_name:
+                        removals.append({"name": existing_name, "action": "remove"})
+                if self.speaker_id not in ids:
+                    rel.setdefault("discord_ids", [])
+                    if self.speaker_id not in rel["discord_ids"]:
+                        rel["discord_ids"].append(self.speaker_id)
+                rel["needs_identification"] = False
+                if self.speaker_display_name and not rel.get("notes"):
+                    rel["notes"] = f"Discord handle: {self.speaker_display_name}"
+            relationships.extend(removals)
+        self.persona_state_manager.apply_updates(plan.state_updates)
