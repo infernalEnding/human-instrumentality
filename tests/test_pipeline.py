@@ -6,8 +6,9 @@ from pathlib import Path
 from persona.audio import AudioFrame, AudioSegment
 from persona.emotion import AudioEmotionResult
 from persona.discord_integration import SpeakerContext
-from persona.llm import LLMResponse, RuleBasedPersonaLLM
+from persona.llm import LLMNarrativeSuggestion, LLMResponse, RuleBasedPersonaLLM
 from persona.memory import MemoryLogger
+from persona.narrative import NarrativeStore, make_event
 from persona.pipeline import PersonaPipeline
 from persona.planner import ResponsePlanner
 from persona.stt import TranscriptionResult, Transcriber
@@ -164,6 +165,32 @@ class EmotionAwareLLM:
             emotion="engaged",
             importance=0.2,
             summary=None,
+        )
+
+
+class NarrativeLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_reply(
+        self,
+        transcript: str,
+        memories: list[str] | None = None,
+        persona_state: list[str] | None = None,
+        sentiment=None,
+        audio_emotion: AudioEmotionResult | None = None,
+    ) -> LLMResponse:
+        self.calls += 1
+        return LLMResponse(
+            text="Narrative noted",
+            should_log_memory=False,
+            emotion="neutral",
+            importance=0.9,
+            summary=None,
+            memory_tags=["mission"],
+            narrative=LLMNarrativeSuggestion(
+                title="Milestone", summary="Reached a key checkpoint", tone="optimistic"
+            ),
         )
 
 
@@ -389,3 +416,84 @@ def test_pipeline_updates_persona_state(tmp_path: Path) -> None:
     assert "painting" in updated["hobbies"]
     assert updated["medium_term"][0]["summary"].startswith("Talked about creative")
     assert "alex" in updated["relationships"]
+
+
+def test_pipeline_includes_narrative_context_per_speaker(tmp_path: Path) -> None:
+    segment = AudioSegment(
+        frames=[
+            AudioFrame(
+                pcm=b"\x01\x00" * 80, sample_rate=16000, channels=1, timestamp=0.0
+            )
+        ]
+    )
+    store = NarrativeStore(tmp_path / "events.jsonl")
+    matching_event = make_event(
+        LLMNarrativeSuggestion(title="Chapter 1", summary="Met Sam at the park"),
+        tags=["park", "sam"],
+        speaker_id="u-1",
+    )
+    other_event = make_event(
+        LLMNarrativeSuggestion(title="Other", summary="Met Jamie"),
+        tags=["jamie"],
+        speaker_id="u-2",
+    )
+    store.add_event(matching_event)
+    store.add_event(other_event)
+
+    llm = CapturingLLM()
+    pipeline = PersonaPipeline(
+        vad=EnergyVAD(threshold=0.05, min_speech_frames=2, max_silence_frames=1),
+        transcriber=ScriptedTranscriber("How are you?"),
+        llm=llm,
+        planner=ResponsePlanner(),
+        synthesizer=DebugSynthesizer(),
+        memory_logger=None,
+        persona_state_manager=None,
+        narrative_store=store,
+    )
+
+    speaker_ctx = SpeakerContext(
+        guild_id=None, channel_id=None, user_id="u-1", display_name="Tester"
+    )
+    pipeline.process_utterance(segment, speaker_ctx=speaker_ctx)
+
+    assert llm.persona_state is not None
+    assert any("Met Sam at the park" in item for item in llm.persona_state)
+    assert all("Met Jamie" not in item for item in llm.persona_state)
+
+
+def test_pipeline_persists_narrative_suggestion(tmp_path: Path) -> None:
+    segment = AudioSegment(
+        frames=[AudioFrame(pcm=b"\x01\x00" * 80, sample_rate=16000, channels=1, timestamp=0.0)]
+    )
+    store = NarrativeStore(tmp_path / "narratives.jsonl")
+    preexisting = store.add_event(
+        make_event(
+            LLMNarrativeSuggestion(title="Earlier mission", summary="Checked supplies"),
+            tags=["mission", "supplies"],
+            speaker_id="007",
+        )
+    )
+
+    pipeline = PersonaPipeline(
+        vad=EnergyVAD(threshold=0.05, min_speech_frames=2, max_silence_frames=1),
+        transcriber=ScriptedTranscriber("Initiate report"),
+        llm=NarrativeLLM(),
+        planner=ResponsePlanner(),
+        synthesizer=DebugSynthesizer(),
+        memory_logger=None,
+        narrative_store=store,
+    )
+
+    pipeline.process_utterance(
+        segment,
+        speaker_ctx=SpeakerContext(
+            guild_id=None, channel_id=None, user_id="007", display_name="Bond"
+        ),
+    )
+
+    assert len(store.events) >= 2
+    latest = store.events[0]
+    assert latest.speaker_id == "007"
+    assert "mission" in latest.tags
+    assert preexisting.id in latest.related_ids

@@ -11,6 +11,7 @@ def test_memory_logger_writes_metadata(tmp_path) -> None:
         transcript="We pledged to remember the mission",
         response="Absolutely, it's important",
         emotion="focused",
+        sentiment=None,
         importance=0.75,
         summary="Mission promise",
         tags=("mission",),
@@ -31,7 +32,12 @@ def test_memory_should_log_heuristics(tmp_path) -> None:
         response="I'll keep it in mind",
     )
     logger.log(
-        transcript="Logged", response="ok", emotion="calm", importance=0.8, summary="Logged"
+        transcript="Logged",
+        response="ok",
+        emotion="calm",
+        sentiment=None,
+        importance=0.8,
+        summary="Logged",
     )
     assert not logger.should_log(
         llm_flag=False,
@@ -47,6 +53,7 @@ def test_memory_logger_adds_user_tag(tmp_path) -> None:
         transcript="Chatting with a user",
         response="Responded",
         emotion=None,
+        sentiment=None,
         importance=0.7,
         summary="User chat",
         tags=("custom",),
@@ -63,6 +70,7 @@ def test_memory_list_and_retrieve(tmp_path) -> None:
         transcript="We discussed breakfast",
         response="Sounds tasty",
         emotion="cheerful",
+        sentiment=None,
         importance=0.6,
         summary="Breakfast chat",
     )
@@ -71,6 +79,7 @@ def test_memory_list_and_retrieve(tmp_path) -> None:
         transcript="Mission details shared",
         response="Acknowledged the mission",
         emotion="focused",
+        sentiment=None,
         importance=0.8,
         summary="Mission brief",
     )
@@ -89,6 +98,7 @@ def test_format_entries_for_prompt_prioritises_importance(tmp_path) -> None:
         transcript="Casual chit chat",
         response="Noted",
         emotion="calm",
+        sentiment=None,
         importance=0.2,
         summary="Small talk",
     )
@@ -96,6 +106,7 @@ def test_format_entries_for_prompt_prioritises_importance(tmp_path) -> None:
         transcript="Discussed the mission parameters",
         response="We agreed on the plan",
         emotion="focused",
+        sentiment=None,
         importance=0.85,
         summary="Mission parameters",
     )
@@ -114,6 +125,7 @@ def test_retrieve_prefers_speaker_memories(tmp_path) -> None:
         transcript="Discussed the mission goals in depth mission",
         response="Great details",
         emotion="focused",
+        sentiment=None,
         importance=0.6,
         summary="Global mission memory",
     )
@@ -121,6 +133,7 @@ def test_retrieve_prefers_speaker_memories(tmp_path) -> None:
         transcript="Mission update received",
         response="Acknowledged",
         emotion="curious",
+        sentiment=None,
         importance=0.7,
         summary="User mission memory",
         speaker_id="7",
@@ -138,6 +151,7 @@ def test_format_prompt_falls_back_without_speaker_match(tmp_path) -> None:
         transcript="Talked about a shared hobby",
         response="Sounds fun",
         emotion="happy",
+        sentiment=None,
         importance=0.9,
         summary="General hobby memory",
     )

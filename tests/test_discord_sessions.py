@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 from types import SimpleNamespace
 
+from persona.denoiser import NoOpDenoiser
 from persona.discord_integration import (
     DiscordVoiceBridge,
     SpeakerContext,
@@ -55,6 +56,8 @@ def test_speaker_session_enqueues_segments() -> None:
 class _DummyPipeline:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.denoiser_factory = NoOpDenoiser
+        self.vad_factory = _vad_factory
 
     def process_utterance(self, segment, *, start_time=None, end_time=None, speaker_ctx=None):
         self.calls.append((segment, speaker_ctx))
